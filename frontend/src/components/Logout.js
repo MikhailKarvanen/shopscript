@@ -1,49 +1,33 @@
-import React, {useEffect, useState} from "react";
-import {Link} from "react-router-dom";
+import React, { useEffect } from "react";
+import { useHistory } from "react-router-dom";
+import api, { setAuthToken } from "../api";
 
+const Logout = ({ onLogout }) => {
+  const history = useHistory();
 
+  useEffect(() => {
+    const logout = async () => {
+      const storedUser = JSON.parse(localStorage.getItem('user'));
 
-const Logout = ({user}) => {
+      if (storedUser?.refreshToken) {
+        try {
+          await api.post('api/logout', { refreshToken: storedUser.refreshToken });
+        } catch (err) {
+          console.error(err.response?.data || err.message);
+        }
+      }
 
-
-    // return axios.post(API_URL + "signout").then((response) => {
-    //     return response.data;
-    // });
-
-    localStorage.removeItem('user')
-    localStorage.setItem('user.isLoggedIn', 'false');
-    user.isLoggedIn = false;
-    const removeToken = () => {
-        localStorage.removeItem('user')
-
-
+      // Cleanup
+      localStorage.removeItem('user');
+      setAuthToken(null);
+      onLogout();
+      history.push('/login');
     };
 
-    // useEffect(()=> {
-    //     const removeToken= async () =>{
-    //         localStorage.removeItem('user')
-    //
-    //
-    //     }
-    //     localStorage.removeItem('user')
-    //     localStorage.setItem('user.isLoggedIn', 'false');
-    //     //user.username = '';
-    //
-    //
-    //     // Tarkistetaan onko säiliössä on "user"-objekti
-    //
-    //
-    // }, []);
+    logout();
+  }, [onLogout, history]);
 
-        return (<div className="container"><h2>You are logged out!</h2>
-            <nav>
-                <div className="nav">
+  return <div className="container"><h2>You are logged out!</h2></div>;
+};
 
-                    <Link to="/list">List events</Link>&nbsp;&nbsp;&nbsp;
-                </div>
-            </nav>
-        </div>)
-
-
-}
-export default Logout
+export default Logout;

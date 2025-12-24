@@ -1,13 +1,15 @@
-let express = require('express');
-let app = express();
+const express = require('express');
+const app = express();
+
+// Db
+const knex = require('./db/knex')
 
 const cors = require('cors');
-let mysql = require('mysql');
 let url = require("url");
 
 
 // Authentification
-const authenticateToken = require("./middleware/auth");
+const { generateAccessToken, generateRefreshToken, authenticateToken } = require('./middleware/auth');
 
 // For file uploads
 const multer = require('multer')
@@ -51,11 +53,10 @@ app.post('/api/file-upload', upload.single('file'), (req, res) => {
     }
 })
 
-const util = require('util');
+
 
 // For the user authentication
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
+
 const secrets = require ('./config/secrets.js')
 require('dotenv').config()
 
@@ -79,313 +80,259 @@ let urlencodedParser = bodyParser.urlencoded({ extended: false });
 app.use(bodyParser.urlencoded({extended: false}));
 app.use(bodyParser.json());
 
-// Tapahtumat tietyllä aikavälillä
-app.get('/api/event', cors(), async function (req, res) {
-    // let q = url.parse(req.url, true).query;
-    // let startDate = q.from;
-    // let endDate = q.to;
-    // let type = q.type;
+// --- Get all events with date and location --- 
+app.get('/api/events', async (req, res) => {
+  try {
+    const events = await knex('event as e')
+      .join('event_date as d', 'd.Event_id', 'e.Event_id')
+      .join('location as l', 'l.Location_id', 'e.Location_Location_id')
+      .select(
+        'e.Event_id as Event_id',
+        'e.Name as Name',
+        'e.Type as Type',
+        'd.Date as Date',
+        'l.Location_id as Location_id',
+        'l.Location_name as Location_name',
+        'l.Street_address as Street_address',
+        'l.Zip as Zip',
+        'l.City as City',
+        'l.Country as Country'
+      )
+      .orderBy('d.Date', 'asc')
 
-    let sql = "SELECT event.Event_id, event.Type, event.Name, location.Location_id, location.Location_name, location.Street_address, location.City, location.Zip, location.Country , event_date.Date " +
-        " FROM `event`, `location`, `event_date` WHERE event.Event_id=event_date.Event_id AND event.Location_Location_id = location.Location_id "
-
-        // WHERE event.Event_id=event_date.Event_id AND event.Location_Location_id =location.Location_id AND (event_date.Date BETWEEN " + startDate + " AND " + endDate + " )"
-
-    let result;
-    let db = makeDb();
-    try {
-        await makeTransaction(db, async () => {
-            result = await db.query(sql);
-        });
-    } catch (err) {
-        console.log(err);
-    }
-    res.send(result);
+    res.json(events)
+    
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({
+      message: 'Failed to fetch events'
+    })
+  }
 })
 
-// Existing usernames
-app.get('/api/usernames', cors(), async function (req, res) {
+// --- Get a single event by its ID ---
+app.get('/api/events/:id', async (req, res) => {
+  const { id } = req.params
 
-    let q = url.parse(req.url, true).query;
-    let username = q.username;
-    let email = q.email;
+  try {
+    // Fetch event with location and date
+    const event = await knex('event as e')
+      .join('event_date as d', 'd.Event_id', 'e.Event_id')
+      .join('location as l', 'l.Location_id', 'e.Location_Location_id')
+      .select(
+        'e.Event_id as id',
+        'e.Name as name',
+        'e.Type as type',
+        'd.Date as date',
+        'l.Location_id as locationId',
+        'l.Location_name as locationName',
+        'l.City as city',
+        'l.Country as country'
+      )
+      .where('e.Event_id', id)
+      .first() // возвращает один объект или undefined
 
-    let rowsFound = {
-        username: false,
-        email: false
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' })
     }
 
-    let sqlCheckUsername = "SELECT COUNT(username) AS rows_found " +
-        " FROM `user` WHERE username = ? "
-    let sqlCheckEmail = "SELECT COUNT(email) AS rows_found" +
-        " FROM `user` WHERE email = ? "
-
-    try {
-        // Check username
-        if (q.username !== '') {
-            let db = makeDb();
-            await makeTransaction(db, async () => {
-                await db.query(sqlCheckUsername, [q.username]).then((result) => rowsFound.username = result[0].rows_found > 0 ? true : false);
-            });
-        }
-        // Check email
-        if (q.email !== '') {
-            let db = makeDb();
-            await makeTransaction(db, async () => {
-                await db.query(sqlCheckEmail, [q.email]).then((result) => rowsFound.email = result[0].rows_found > 0 ? true : false);
-            });
-        }
-    } catch (err) {
-        console.log(err);
-    }
-
-    res.send(rowsFound);
+    res.json(event)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Failed to fetch event' })
+  }
 })
 
-// Add new event
-app.post('/api/newEvent', authenticateToken,  async (req, res) => {
-    //console.log(req.body)
+// --- Check if username or email already exists ---
+app.get('/api/usernames', async (req, res) => {
+  const { username = '', email = '' } = req.query
 
+  try {
+    const result = {}
 
-
-    //INSERT INTO location (Location_name, Street_address, City, Zip, Country) VALUES ('New Location', 'New address', 'City', 'Zip', 'Country')
-    //INSERT INTO EVENT ( name, TYPE, Location_Location_id) VALUES ('Test event', 'Musiikki', 1)
-    //INSERT INTO event_date (DATE, EVENT_ID) VALUES ('2023-05-05', 11)
-    try {
-        // const hashedPassword = await bcrypt.hash(req.body.password, 10);
-        const event = req.body
-        //console.log(hashedPassword)
-
-        // make updates to the database
-        // if (user.email !== '') { // is  a username present?
-            let sql1 = "INSERT INTO location (Location_name, Street_address, City, Zip, Country) VALUES ( ?, ?, ?, ?, ?)";
-            let sql2 = "INSERT INTO EVENT (name, TYPE, Location_Location_id)"
-                + " VALUES ( ?, ?, ?)";
-            let sql3 = "INSERT INTO event_date (DATE, EVENT_ID)"
-                + " VALUES ( ?, ?)";
-            let db = makeDb();
-            try {
-                await makeTransaction(db, async () => {
-                    let insertedEventId;
-                    let insertedLocationId;
-                    // IF NEW EVENT LOCATION PROVIDED
-                    if(event.locationId === ''){
-                        console.log("Statting transaction")
-                        // INSERT NEW EVENT LOCATION
-                        await db.query(sql1, [event.locationName, event.locationAddr, event.locationCity, event.locationZip, event.locationCountry]).then((result) => insertedLocationId = result.insertId);
-
-                        console.log("Inserted location id " + insertedLocationId)
-                        // INSERT NEW EVENT
-                        await db.query(sql2, [event.name, event.type, insertedLocationId]).then((result) => insertedEventId = result.insertId);
-                        console.log(insertedEventId)
-
-                    }else{
-                        // ELSE IF NO NEW EVENT LOCATION PROVIDED
-                        // INSERT NEW EVENT
-                        await db.query(sql2, [event.name, event.type, event.locationId]).then((result) => insertedEventId = result.insertId);
-
-                        console.log(insertedEventId)
-
-                    }
-
-
-                    // INSERT NEW EVENT DATE
-                    if(insertedEventId){
-                        await db.query(sql3, [event.date, insertedEventId])
-                        //result3.status(200).send("POST 3 succesful ");
-                    }
-
-                });
-            } catch (err) {
-                res.status(400).send("POST was not succesful ");
-            }
-        // }
-    } catch (e) {
-        res.json({message: "Error"});
+    if (username) {
+      const exists = await knex('user')
+        .where({ username })
+        .first()
+      result.username = !!exists
     }
+
+    if (email) {
+      const exists = await knex('user')
+        .where({ email })
+        .first()
+      result.email = !!exists
+    }
+
+    res.json(result)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Failed to check usernames/emails' })
+  }
+})
+
+// --- Create a new event ---
+app.post('/api/newEvent', authenticateToken, async (req, res) => {
+  const event = req.body
+
+  /**
+   * Validate request payload BEFORE starting transaction
+   */
+  if (!event.name || !event.type || !event.date) {
+    return res.status(400).json({
+      message: 'Missing required fields: name, type or date'
+    })
+  }
+
+  try {
+    // Start database transaction
+    await knex.transaction(async trx => {
+      let locationId = event.locationId
+
+      /**
+       * Create location if locationId is not provided
+       */
+      if (!locationId || locationId === '') {
+        const [newLocationId] = await trx('location').insert({
+          Location_name: event.locationName,
+          Street_address: event.locationAddr,
+          City: event.locationCity,
+          Zip: event.locationZip,
+          Country: event.locationCountry
+        })
+
+        locationId = newLocationId
+      }
+
+      /**
+       * Create event
+       */
+      const [eventId] = await trx('event').insert({
+        Name: event.name,
+        Type: event.type,
+        Location_Location_id: locationId
+      })
+
+      /**
+       * Create event date
+       */
+      await trx('event_date').insert({
+        Event_id: eventId,
+        Date: event.date
+      })
+    })
+
+    res.status(201).json({ message: 'Event created successfully' })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Failed to create event' })
+  }
+})
+
+
+const bcrypt = require('bcrypt')
+const jwt = require('jsonwebtoken')
+
+// --- User signup --- 
+app.post('/api/signup', async (req, res) => {
+  const { username, email, password } = req.body
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ message: 'Missing required fields' })
+  }
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10)
+
+    const [newUserId] = await knex('users').insert({
+      username,
+      email,
+      password: hashedPassword,
+      create_time: knex.fn.now()
+    })
+
+
+    // Fetch the user we just inserted
+    const newUser = await knex('user').where({ user_id: newUserId }).first();
+
+    const accessToken = generateAccessToken(newUser);
+    const refreshToken = generateRefreshToken(newUser);
+
+    await knex('users').where({ user_id: newUserId }).update({ refresh_token: refreshToken });
+
+    res.status(201).json({ accessToken, refreshToken, username: newUser.username });
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Failed to register user' })
+  }
+})
+
+// --- User login ---
+app.post('/api/signin', async (req, res) => {
+  const { email, password } = req.body
+  
+
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Missing email or password' })
+  }
+
+  try {
+    const dbUser = await knex('users').where({ email }).first()
+
+    if (!dbUser) {
+      return res.status(401).json({ message: 'Invalid credentials' })
+    }
+
+    const match = await bcrypt.compare(password, dbUser.password)
+    if (!match) {
+      return res.status(401).json({ message: 'Invalid credentials' })
+    }
+
+    // Generate JWT token
+    const accessToken = generateAccessToken(dbUser);
+    const refreshToken = generateRefreshToken(dbUser);
+
+      await knex('users').where({ id: dbUser.id }).update({ refresh_token: refreshToken });
+
+  res.json({ accessToken, refreshToken, username: dbUser.username });
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Failed to login' })
+  }
+})
+
+// --- Refresh access token endpoint ---
+app.post('/api/refresh', async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) return res.status(401).json({ message: 'No refresh token provided' });
+
+  const jwt = require('jsonwebtoken');
+
+  try {
+    const payload = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+
+    const dbUser = await knex('users')
+      .where({ user_id: payload.userId, refresh_token: refreshToken })
+      .first();
+
+    if (!dbUser) return res.status(403).json({ message: 'Invalid refresh token' });
+
+    const newAccessToken = generateAccessToken(dbUser);
+    res.json({ accessToken: newAccessToken });
+  } catch (err) {
+    res.status(403).json({ message: 'Invalid or expired refresh token' });
+  }
 });
 
+// --- User logout endpoint. Deletes refresh token ---
+app.post('/api/logout', async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) return res.status(400).json({ message: 'No refresh token provided' });
 
-// User signup
-app.post('/api/signup', urlencodedParser, async (req, res) => {
-    try {
-        const hashedPassword = await bcrypt.hash(req.body.password, 10);
-        const user = req.body
-        //console.log(hashedPassword)
-
-        // make updates to the database
-        if (user.email !== '') { // is  a username present?
-            let sql = "INSERT INTO user (username, email, password)"
-                + " VALUES ( ?, ?, ?)";
-            let db = makeDb();
-            try {
-                await makeTransaction(db, async () => {
-                    await db.query(sql, [user.username, user.email, hashedPassword]);
-
-                   // res.status(200).send("POST successful ");
-                    const accessToken = jwt.sign(
-						{ id: user.id, email: user.email },
-						process.env.JWT_SECRET,
-						{ expiresIn: "2h" }
-					);
-                    //console.log(accessToken)
-
-                    res.status(202).json({ accessToken: accessToken })
-                });
-            } catch (err) {
-                res.status(400).send("POST was not successful ");
-            }
-        }
-    } catch (e) {
-        res.json({message: "Error"});
-    }
+  await knex('users').where({ refresh_token: refreshToken }).update({ refresh_token: null });
+  res.json({ message: 'Logged out successfully' });
 });
 
-// User login
-app.post('/api/signin', urlencodedParser, async(req, res) => {
-    let user = req.body
-    console.log(user)
-    try {
-        // Try to obtain a given account password from the database to compare
-        let dbUserPassword = ''
-        let dbUserName = ''
-        let sql = "SELECT username, email, password, COUNT(password) AS rows_found " +
-            " FROM `user` WHERE email = ? "
-
-        let db = makeDb()
-        try {
-            await makeTransaction(db, async () => {
-                await db.query(sql, [user.email]).then((result) => {
-                    // If user data found from the database
-                    dbUserPassword = result[0].rows_found === 1 ? result[0].password : null
-                    dbUserName = result[0].rows_found === 1 ? result[0].username : null
-                });
-            });
-            //console.log(dbUserPassword)
-        } catch (err) {
-            console.log(err);
-        }
-
-        //Comparing the passswods
-        if(dbUserPassword !== null){
-            try{
-                const match = await bcrypt.compare(user.password, dbUserPassword);
-                const accessToken = jwt.sign(
-					{ username: dbUserName, email: user.email },
-					process.env.JWT_SECRET,
-					{ expiresIn: "2h" }
-				);
-                if(match){
-                    console.log("Passwords matched")
-                    res.json({
-                        accessToken: accessToken,
-                        username: dbUserName,
-                        message: "User Identified"});
-                } else {
-                    res.json({
-                        accessToken: null,
-                        message: "Invalid Credentials" });
-                }
-            } catch(e) {
-                console.log(e)
-            }
-        } else {
-            res.json({
-                accessToken: null,
-                message: "Invalid Credentials" });
-        }
-    }catch(e){
-        res.json({
-            accessToken: null,
-            message: "Error"})
-    }
-
-})
-
-// Yksittäisen ajoneuvon tiedot id:lla
-// app.get('/api/car/:id', cors(), async function (req, res, url) {
-//     let sql = "SELECT vehicle.Vehicle_id, vehicle_type.Type_name, Vehicle_model, Reg_number, Price, Vehicle_descr, Vehicle_src FROM vehicle, vehicle_type WHERE vehicle.Vehicle_id = '" + req.params.id + "' AND vehicle.Vehicle_type = vehicle_type.Type_id GROUP BY Vehicle_type ";
-//     let db = makeDb();
-//     let result;
-//     try {
-//         await makeTransaction(db, async () => {
-//             result = await db.query(sql);
-//         });
-//     } catch (err) {
-//         console.log(err);
-//     }
-//     res.send(result);
-// });
-
-// Ajoneuvon tyyppin nimi id:llä
-// app.get('/api/vehicle_type/:id', cors(), async function (req, res, url) {
-//     let sql = "SELECT Type_id, Type_name FROM vehicle_type WHERE Type_id = '" + req.params.id + "' GROUP BY Type_id ";
-//     let db = makeDb();
-//     let result;
-//     try {
-//         await makeTransaction(db, async () => {
-//             result = await db.query(sql);
-//         });
-//     } catch (err) {
-//         console.log(err);
-//     }
-//     res.send(result);
-// });
-
-// Ajoneuvon tyypit
-// app.get('/api/vehicle_type', cors(), async function (req, res) {
-//     let sql = "SELECT vehicle_type.Type_id, Type_name FROM vehicle_type WHERE 1=1 ORDER BY Type_id";
-//     let db = makeDb();
-//     let result;
-//     try {
-//         await makeTransaction(db, async () => {
-//             result = await db.query(sql);
-//         });
-//     } catch (err) {
-//         console.log(err);
-//     }
-//
-//     res.send(result);
-// });
-
-// Tilauksen tekeminen
-// app.post('/api/orders/', async function (req, res, url) {
-//     let json = JSON.stringify(req.body);
-//     let jsonLength = Object.keys(json).length;
-//
-//     let sql = "INSERT INTO `order` (Personal_id, First_name, Last_name, Email, Phone_Number, Home_address," +
-//         "City,Postal_code,Additional_info,Payment,Vehicle_id, Date_create, Order_start, Order_end, Amount)" +
-//         "SELECT *" +
-//         " FROM JSON_TABLE ('" + json + "', '$' COLUMNS ( " +
-//         "Personal_id         VARCHAR(11)     PATH '$[0].Personal_id', " +
-//         "First_name          VARCHAR(45)     PATH '$[0].First_name', " +
-//         "Last_name           VARCHAR(45)     PATH '$[0].Last_name', " +
-//         "Email               VARCHAR(45)     PATH '$[0].Email', " +
-//         "Phone_Number        VARCHAR(13)     PATH '$[0].Phone_Number', " +
-//         "Home_address        VARCHAR(50)     PATH '$[0].Home_address', " +
-//         "City                VARCHAR(50)     PATH '$[0].City', " +
-//         "Postal_code         int(5)          PATH '$[0].Postal_code', " +
-//         "Additional_info	 TEXT 		     PATH '$[0].Additional_info', " +
-//         "Payment             VARCHAR(50)     PATH '$[0].Payment', " +
-//         "Vehicle_id          INT(11)         PATH '$[0].Vehicle_id'," +
-//         "Date_create         datetime        PATH '$[0].Date_create', " +
-//         "Order_start         datetime        PATH '$[0].Order_start', " +
-//         "Order_end           datetime        PATH '$[0].Order_end', " +
-//         "Amount              decimal(10,2)   PATH '$[0].Amount')) AS `order`;"
-//
-//     let db = makeDb();
-//     let result;
-//     try {
-//         await makeTransaction(db, async () => {
-//             result = await db.query(sql);
-//         });
-//     } catch (err) {
-//         console.log(err);
-//     }
-//
-//     res.send(result);
-//
-// })
 
 const PORT = process.env.PORT || 5000;
 
@@ -393,52 +340,14 @@ let server = app.listen(PORT, () => {
     console.log(`Backend running on port ${PORT}`);
 });
 
-// Method for interacting with database
 
-
-function makeDb() {
-
-const connection = mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    port: process.env.DB_PORT
-});
-
-    return {
-        query(sql, args) {
-            return util.promisify(connection.query)
-                .call(connection, sql, args);
-        },
-        close() {
-            return util.promisify(connection.end).call(connection);
-        },
-        beginTransaction() {
-            return util.promisify(connection.beginTransaction)
-                .call(connection);
-        },
-        commit() {
-            return util.promisify(connection.commit)
-                .call(connection);
-        },
-        rollback() {
-            return util.promisify(connection.rollback)
-                .call(connection);
-        }
-    };
-}
-
-// Method making transaction
-async function makeTransaction(db, callback) {
-    try {
-        await db.beginTransaction();
-        await callback();
-        await db.commit();
-    } catch (err) {
-        await db.rollback();
-        throw err;
-    } finally {
-        await db.close();
-    }
-}
+// --- DB TEST ROUTE ---
+app.get('/api/health/db', async (req, res) => {
+  try {
+    await knex.raw('SELECT 1')
+    res.json({ db: 'ok' })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ db: 'error' })
+  }
+})

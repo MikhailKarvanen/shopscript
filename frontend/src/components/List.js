@@ -17,23 +17,25 @@ const List = ({events}) => {
 
     // Form handlers
     const handleEventStartDateChange = (eventStartDate) => {
-        //console.log(eventStartDate.target.value)
+        console.log(eventStartDate.target.value)
         setEventStartDate(eventStartDate.target.value)
     }
     const handleEventEndDateChange = (eventEndDate) => {
-        //console.log(eventEndDate.target.value)
+        console.log(eventEndDate.target.value)
         setEventEndDate(eventEndDate.target.value)
     }
     const handleEventTypeChange = (eventType) => {
-        //console.log(eventType.target.value)
+        console.log(eventType.target.value)
         setEventType(eventType.target.value)
     }
+    
 
     return(
         <div className="container">
 
             <form>
                 <div className="mb-3 mt-3">
+                   
                     <label htmlFor="date" className="form-label">Tapahtuman tyyppi:</label>
                     <select name="eventType"
                             value ={eventType}

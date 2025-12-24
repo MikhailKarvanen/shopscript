@@ -1,20 +1,19 @@
-export async function up(knex) {
+exports.up = async function (knex) {
   await knex.schema.createTable('event', table => {
     table.increments('Event_id').primary()
     table.string('Name', 45)
     table.string('Type', 15)
+    table.integer('Location_Location_id').unsigned().notNullable()
 
     table
-      .integer('Location_Location_id')
-      .unsigned()
-      .notNullable()
+      .foreign('Location_Location_id')
       .references('Location_id')
       .inTable('location')
-      .onDelete('RESTRICT')
-      .onUpdate('RESTRICT')
+      .onUpdate('NO ACTION')
+      .onDelete('NO ACTION')
   })
 }
 
-export async function down(knex) {
+exports.down = async function (knex) {
   await knex.schema.dropTableIfExists('event')
 }
